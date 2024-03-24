@@ -38,18 +38,6 @@ class Trainer(object):
         self.normal_loader, self.train_loader, self.test_loader = initDataloader.build(self.args, **kwargs)
 
 
-        # self.model = DRA(args, backbone=self.args.backbone)
-
-        # if self.args.pretrain_dir != None:
-        #     self.model.load_state_dict(torch.load(self.args.pretrain_dir))
-        #     print('Load pretrain weight from: ' + self.args.pretrain_dir)
-
-        # self.criterion = build_criterion(args.criterion)
-
-        # self.optimizer = torch.optim.Adam(self.model.parameters(), lr=0.0002, weight_decay=1e-5)
-        # self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=10, gamma=0.1)
-
-    
     def train_meta_epoch(self, args, epoch, encoder, decoders, optimizer):
     # def train_meta_epoch(self, args, epoch, normal_dataloder, train_dataloder, encoder, decoders, optimizer):
         N_batch = 4096
@@ -72,8 +60,6 @@ class Trainer(object):
             # dataloader
             tbar = tqdm(data_loader)
             for index, sample in enumerate(tbar): 
-                # print("--position2")
-                # time.sleep(0.01)
                 # warm-up learning rate
                 #  计算并返回当前的学习率。这里使用了warm-up策略，在训练开始时学习率较小，逐渐增加到正常值，以稳定训练过程
                 # lr = warmup_learning_rate(args, epoch, i+sub_epoch*I, I*args.sub_epochs, optimizer)
@@ -97,35 +83,28 @@ class Trainer(object):
 
                 with torch.no_grad(): 
                     features = encoder(image)  # 使用特征提取器（Encoder）提取特征
-                    # print("features.shape", features[0].shape)
-                    # print("features.shape", features[1].shape)
-                    # print("features.shape", features[2].shape)
 
                     ref_features = encoder(ref_image)  # 使用特征提取器（Encoder）提取特征
 
-                # # # # # # # # # # # # # # # # # # # # # # # #
-#                 # 这边先相减，再要加上注意力，再到后面的解码器
-#                 # 因为encoder按特征层级输出，所以残差也需要按特征层级相减后存储
-#                 # 相减后得到残差特征
-                
-#                 residual_features = []
-#                 for feat, ref_feat in zip(features, ref_features):
-#                     residual_feature = ref_feat - feat
-#                     residual_features.append(residual_feature)
-#                 features = residual_features
-#                 # print("residual_features", residual_features)
+                # residual calculation module# # # # # # # # # # # # # # # # # # # # 
+                residual_features = []
+                for feat, ref_feat in zip(features, ref_features):
+                    residual_feature = ref_feat - feat
+                    residual_features.append(residual_feature)
+                features = residual_features
+                # print("residual_features", residual_features)
+                # residual calculation module# # # # # # # # # # # # # # # # # # # # 
 
-                # 加上注意力模块,主要对最后一个层级(即features[2])进行修改
+                # Attention Network # # # # # # # # # # # # # # # # # # # 
                 # print("features.shape", features[2].shape)
                 features[2] = AttentionModule(features[2])
+                # Attention Network # # # # # # # # # # # # # # # # # # # 
 
                 # # # # # # # # # # # # # # # # # # # # # # # # 
 
                 for l in range(args.feature_levels):  # 遍历不同的特征层级。
                     e = features[l].detach()   # 获取特征层级l的特征，使用detach()函数将其从计算图中分离，避免计算梯度。
                     bs, dim, h, w = e.size()  # 从特征层级中获取对应的batch、维度、长、宽
-                    # mask_ = F.interpolate(mask, size=(h, w), mode='nearest').squeeze(1)
-                    # mask_ = mask_.reshape(-1)
                     e = e.permute(0, 2, 3, 1).reshape(-1, dim)   # 将特征张量e进行维度的变换和重塑
                     
                     # (bs, 128, h, w)   # pos_embed_dim = default=128,
@@ -147,13 +126,6 @@ class Trainer(object):
                     pixel_label = torch.tensor(pixel_label)
                     pixel_label = pixel_label.to(args.device)
 
-                    # 检查标签是否正确对应
-                    # for num in range(len(label)):
-                    #     for j in range(h*w):
-                    #         if label[num] != pixel_label[num*h*w + j]:
-                    #             print("label is not match")
-
-
                     # 通过这样的采样方式，每次训练时，模型都会在不同位置、不同特征和不同掩码样本上进行训练，
                     # 从而增加了数据的多样性和随机性，有助于提高模型的鲁棒性和泛化能力。
                     for i in range(num_N_batches):
@@ -161,14 +133,11 @@ class Trainer(object):
                         p_b = pos_embed[perm[idx]]  
                         e_b = e[perm[idx]]  
                         pixel_label_b = pixel_label[perm[idx]]
-                        # m_b = mask_[perm[idx]]  
                         if args.flow_arch == 'flow_model': 
                             z, log_jac_det = decoder(e_b)  
                         else:
                             z, log_jac_det = decoder(e_b, [p_b, ])
                         
-                        # pixel_label = torch.tensor(expanded_label[i])
-                        # pixel_label = torch.full((N_batch,), pixel_label.item(), dtype=torch.int64)
             
                         # first epoch only training normal samples
                         if epoch == 0:   # 第一次meta_epoch时使用下面的损失
@@ -200,14 +169,6 @@ class Trainer(object):
                                 logps = get_logp(dim, z, log_jac_det)  
                                 logps = logps / dim 
                                 if args.focal_weighting: # default = None
-                                    # logps_detach = logps.detach()
-                                    # normal_logps = logps_detach[m_b == 0]
-                                    # anomaly_logps = logps_detach[m_b == 1]
-                                    # nor_weights = normal_fl_weighting(normal_logps)
-                                    # ano_weights = abnormal_fl_weighting(anomaly_logps)
-                                    # weights = nor_weights.new_zeros(logps_detach.shape)
-                                    # # weights[m_b == 0] = nor_weights
-                                    # # weights[m_b == 1] = ano_weights
                                     loss_ml = -log_theta(logps[pixel_label_b == 0.0])  # (256, )
                                     loss_ml = torch.mean(loss_ml)
                                 else:
@@ -231,19 +192,13 @@ class Trainer(object):
                             optimizer.step()
                             loss_item = loss.item()
             
-                            # if math.isnan(loss_item):
-                            #     total_loss += 0.0
-                            #     loss_count += 0
-                            # else:
-                            #     total_loss += loss.item()
-                            #     loss_count += 1
 
                             total_loss += loss_item
                             loss_count += 1                                
 
             mean_loss = total_loss / loss_count
             print('Epoch: {:d}.{:d} \t train loss: {:.4f}, '.format(epoch, sub_epoch, mean_loss))
-            # print('Epoch: {:d}.{:d} \t train loss: {:.4f}, lr={:.6f}'.format(epoch, sub_epoch, mean_loss, lr))
+
 
 
     def validate(self, args, epoch, data_loader, encoder, decoders):
@@ -265,7 +220,7 @@ class Trainer(object):
 
                 file_names.extend(file_name) # 记录文件名字
                 gt_label_list.extend(t2np(label))
-                # gt_mask_list.extend(t2np(mask))
+
                 
                 # # 记录文件名字
                 # with open('label in test.txt', 'w') as f:
@@ -279,20 +234,21 @@ class Trainer(object):
                 features = encoder(image)  # BxCxHxW
                 ref_features = encoder(ref_image) 
 
-                # # # # # # # # # # # # # # # # # # # # # # # #
-                # # 这边先相减，再要加上注意力，再到后面的解码器
-                # # 因为encoder按特征层级输出，所以残差也需要按特征层级相减后存储
-                # # 相减后得到残差特征
-                # residual_features = []
-                # for feat, ref_feat in zip(features, ref_features):
-                #     residual_feature = ref_feat - feat
-                #     residual_features.append(residual_feature)
-                # features = residual_features
-                # # print("residual_features", residual_features)
+                # residual calculation module# # # # # # # # # # # # # # # # # # # # 
+                residual_features = []
+                for feat, ref_feat in zip(features, ref_features):
+                    residual_feature = ref_feat - feat
+                    residual_features.append(residual_feature)
+                features = residual_features
+                # print("residual_features", residual_features)
+                # residual calculation module# # # # # # # # # # # # # # # # # # # # 
 
-                # 加上注意力模块,主要对最后一个层级(即features[2])进行修改
+
+                # Attention Network # # # # # # # # # # # # # # # # # # # 
                 # print("features.shape", features[2].shape)
                 features[2] = AttentionModule(features[2])
+                # Attention Network # # # # # # # # # # # # # # # # # # # 
+
 
                 # # # # # # # # # # # # # # # # # # # # # # # # 
                 for l in range(args.feature_levels):
@@ -325,59 +281,38 @@ class Trainer(object):
         # calculate detection AUROC
         img_scores = np.max(scores, axis=(1, 2))
         gt_label = np.asarray(gt_label_list, dtype=bool)
-
-        # 检验输出问题
-        # print("img_scores:", img_scores)
-        # print("gt_label_list:", gt_label)
-        # print("file_names:", file_names)    
-        # 将数据写入文本文件
-        with open('output.txt', 'w') as f:
-            for img_score, gt_l, file_name in zip(img_scores, gt_label, file_names):
-                f.write(f"{img_score}\t{gt_l}\t{file_name}\n")
         
 
         # print("label:", gt_label, "img_scores:", img_scores)
         img_auc = roc_auc_score(gt_label, img_scores)
-        # calculate segmentation AUROC
-        # gt_mask = np.squeeze(np.asarray(gt_mask_list, dtype=np.bool), axis=1)
-        # pix_auc = roc_auc_score(gt_mask.flatten(), scores.flatten())
-        #pix_auc = -1
-        # pix_pro = -1
-        # if args.pro:
-        #     pix_pro = calculate_pro_metric(scores, gt_mask)
-        
-        # # 接着？？？？？
-        # if args.vis and epoch == args.meta_epochs - 1:
-        #     img_threshold, pix_threshold = evaluate_thresholds(gt_label, gt_mask, img_scores, scores)
-        #     save_dir = os.path.join(args.output_dir, args.exp_name, 'vis_results', args.class_name)
-        #     os.makedirs(save_dir, exist_ok=True)
-        #     plot_visualizing_results(image_list, scores, img_scores, gt_mask_list, pix_threshold, 
-        #                             img_threshold, save_dir, file_names, img_types)
+
         print(' Image-AUC: {}'.format(img_auc))
 
         return img_auc
-        # return img_auc, pix_auc, pix_pro
+
 
 
     def training(self):
-        # # Feature Extractor   # 创建特征提取器（Encoder）
-        # encoder = timm.create_model(self.args.backbone_arch, features_only=True, 
-        #             out_indices=[i+1 for i in range(self.args.feature_levels)], pretrained=True)  # pretrained=True
-
-        pretrained_weights = torch.load('tf_efficientnet_b6_aa-80ba17e4.pth')
-        # 创建EfficientNet模型
+        # Loading online ###########################################
+        # Feature Extractor   # 创建特征提取器（Encoder）
         encoder = timm.create_model(self.args.backbone_arch, features_only=True, 
-                                         out_indices=[i+1 for i in range(self.args.feature_levels)])
-        # 逐层加载本地权重，允许部分权重缺失
-        encoder.load_state_dict(pretrained_weights, strict=False)
+                    out_indices=[i+1 for i in range(self.args.feature_levels)], pretrained=True)  # pretrained=True
+        # Loading online ###########################################
+
+        # # Loading locally  ###########################################
+        # pretrained_weights = torch.load('tf_efficientnet_b6_aa-80ba17e4.pth')
+        # # 创建EfficientNet模型
+        # encoder = timm.create_model(self.args.backbone_arch, features_only=True, 
+        #                                  out_indices=[i+1 for i in range(self.args.feature_levels)])
+        # # 逐层加载本地权重，允许部分权重缺失
+        # encoder.load_state_dict(pretrained_weights, strict=False)
+        # Loading locally  ###########################################
     
-    
-        # 将特征提取器移动到指定的设备（如GPU），并设置为评估模式，即禁用Dropout和BatchNormalization等操作
+
         encoder = encoder.to(self.args.device).eval()
         feat_dims = encoder.feature_info.channels()
         
         # Normalizing Flows
-        # 创建多个正态化流（Normalizing Flows）解码器，每个解码器对应一个特征层级
         decoders = [load_flow_model(self.args, feat_dim) for feat_dim in feat_dims]
         decoders = [decoder.to(self.args.device) for decoder in decoders]
         params = list(decoders[0].parameters())
@@ -389,8 +324,6 @@ class Trainer(object):
 
         # stats   # 初始化用于记录性能指标的MetricRecorder
         img_auc_obs = MetricRecorder('IMG_AUROC')
-        # pix_auc_obs = MetricRecorder('PIX_AUROC')
-        # pix_pro_obs = MetricRecorder('PIX_AUPRO')
 
         for epoch in range(self.args.meta_epochs):   # 共进行args.meta_epochs个epoch的训练。
             # if args.checkpoint:
@@ -404,14 +337,8 @@ class Trainer(object):
             img_auc = self.validate(self.args, epoch, self.test_loader, encoder, decoders)
 
             img_auc_obs.update(100.0 * img_auc, epoch)
-            # pix_auc_obs.update(100.0 * pix_auc, epoch)
-            # pix_pro_obs.update(100.0 * pix_pro, epoch)
-             
 
-        # if self.args.save_results:
-        #     # save_results(img_auc_obs, pix_auc_obs, pix_pro_obs, args.output_dir, args.exp_name, args.model_path, args.class_name)
-        #     save_results(img_auc_obs, self.args.output_dir, self.args.exp_name, self.args.model_path, self.args.class_name)
-        #     save_weights(encoder, decoders, self.args.output_dir, self.args.exp_name, self.args.model_path)  # avoid unnecessary saves
+
 
         return img_auc_obs.max_score
 
@@ -448,7 +375,7 @@ def aucPerformance(mse, labels, prt=True):
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--batch_size", type=int, default=32, help="batch size used in SGD")  # default=48    batch 会减去3，ex:8-3=5
+    parser.add_argument("--batch_size", type=int, default=32, help="batch size used in SGD")  
     parser.add_argument('--meta_epochs', type=int, default=30, metavar='N',
                         help='number of meta epochs to train (default: 25)')
     parser.add_argument('--sub_epochs', type=int, default=4, metavar='N',   # default=8
@@ -460,18 +387,21 @@ def parse_args():
                         help="the outlier contamination rate in the training data")
     parser.add_argument("--test_rate", type=float, default=0.0,
                         help="the outlier contamination rate in the training data")
-    parser.add_argument("--dataset", type=str, default='mvtecad', help="a list of data set names")  ## 这个跑其他数据集也不用修改 default='mvtecad' eyesight
+    parser.add_argument("--dataset", type=str, default='mvtecad', help="a list of data set names")  ## default='mvtecad' or "eyesight"
+
     parser.add_argument("--ramdn_seed", type=int, default=42, help="the random seed number")
     parser.add_argument('--workers', type=int, default=5, metavar='N', help='dataloader threads')
     parser.add_argument('--no-cuda', action='store_true', default=False, help='disables CUDA training')
     parser.add_argument('--savename', type=str, default='model.pkl', help="save modeling")
-    # 修改数据集根目录
-    parser.add_argument('--dataset_root', type=str, default='E:/CS dataset/Zhongshan Dataset 2023.3.19-1.12 combine/1.Zhongshan data combine1.12-3.19', help="dataset root")
+
+    # loading your dataset root.......
+    parser.add_argument('--dataset_root', type=str, default='E:/CS dataset/Anomaly Detection Dataset/MVTec_Anomaly_Detection', help="dataset root")
     # parser.add_argument('--dataset_root', type=str, default='/userhome/MVTec_Anomaly_Detection', help="dataset root")
     # parser.add_argument('--dataset_root', type=str, default='/userhome', help="dataset root")
 
+
     parser.add_argument('--experiment_dir', type=str, default='./experiment/experiment_14', help="dataset root")
-    parser.add_argument('--classname', type=str, default='zipper', help="dataset class")    # capsule  default='dataset_anomaly_detection_WholeFace'
+    parser.add_argument('--classname', type=str, default='tile', help="dataset class")    #  default=tile ,  default='dataset_anomaly_detection_WholeFace'
     parser.add_argument('--img_size', type=int, default=224, help="dataset root") 
     parser.add_argument("--nAnomaly", type=int, default=10, help="the number of anomaly data in training set")  # nAnomaly default=10
     parser.add_argument("--n_scales", type=int, default=1, help="number of scales at which features are extracted")
@@ -564,28 +494,13 @@ if __name__ == '__main__':
     args.cuda = not args.no_cuda and torch.cuda.is_available()
     trainer = Trainer(args)
 
-    # 记录参数
-    # argsDict = args.__dict__
-    # if not os.path.exists(args.experiment_dir):
-    #     os.makedirs(args.experiment_dir)
-    # with open(args.experiment_dir + '/setting.txt', 'w') as f:
-    #     f.writelines('------------------ start ------------------' + '\n')
-    #     for eachArg, value in argsDict.items():
-    #         f.writelines(eachArg + ' : ' + str(value) + '\n')
-    #     f.writelines('------------------- end -------------------')
-
    
     print('meta_epochs:', trainer.args.meta_epochs, 'sub_epochs:', trainer.args.sub_epochs)
     print('batch_size:', trainer.args.batch_size)
     print('pos_beta:', trainer.args.pos_beta, 'margin_tau:', trainer.args.margin_tau)
     print("classname", trainer.args.classname)
     print("nAnomaly", trainer.args.nAnomaly)
-    # print('Total Epoches:', trainer.args.epochs)
-    # print("classname", trainer.args.classname)
-    # trainer.model = trainer.model.to('cuda')
-    # trainer.criterion = trainer.criterion.to('cuda')
-    # for epoch in range(0, trainer.args.meta_epochs):
-    #     trainer.training(epoch)
+
     trainer.training()
     # trainer.eval()
     # trainer.save_weights(args.savename)

@@ -20,8 +20,8 @@ class initDataloader():
                                       batch_sampler = BalancedBatchSampler(args, train_set, train_type="train_set"),
                                       **kwargs)
             test_loader = DataLoader(test_set,
-                                    #  batch_size=args.batch_size,
-                                     batch_size = 1,
+                                     batch_size=args.batch_size,
+                                    #  batch_size = 1,
                                      shuffle=False,
                                      worker_init_fn= worker_init_fn_seed,
                                      **kwargs)
@@ -41,8 +41,8 @@ class initDataloader():
                                       batch_sampler = BalancedBatchSampler(args, train_set, train_type="train_set"),
                                       **kwargs)
             test_loader = DataLoader(test_set,
-                                    #  batch_size=args.batch_size,
-                                     batch_size = 1,
+                                     batch_size=args.batch_size,
+                                    #  batch_size = 1,
                                      shuffle=False,
                                      worker_init_fn= worker_init_fn_seed,
                                      **kwargs)
